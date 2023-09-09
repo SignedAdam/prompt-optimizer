@@ -17,35 +17,56 @@ tasks = {
 }
 
 model = "gpt-4"
-variationCount = 10
-taskRunCount = 5
+variation_count = 2
+task_run_count = 2
 
-def generate_prompts_for_task(task, model, variationCount):
-    prompts = []
-    for _ in range(variationCount):
+call_limiter = 10
+current_call_count = 0
+
+def openai_chat_completion(model, messages, functions=None):
+    global current_call_count
+    current_call_count = current_call_count+1
+    if current_call_count > call_limiter: 
+        print("call limit reached")
+        return
+    
+    if functions:
         response = openai.ChatCompletion.create(
             model=model,
-            messages=[
+            messages=messages,
+            functions=functions,
+        )
+        return response['choices'][0]['message']["function_call"]["arguments"] # type: ignore
+    else:
+        response = openai.ChatCompletion.create(
+            model=model,
+            messages=messages,
+        )
+        return response['choices'][0]['message']['content']  # type: ignore
+
+def generate_prompts_for_task(task, model, variation_count):
+    prompts = []
+    for _ in range(variation_count):
+        messages=[
                 {"role": "system", "content": "You are a prompt assistant. You are given a task for which you need to generate a prompt that we can later use to request to complete said task."},
                 {"role": "user", "content": f"Please provide a prompt for completing the following task: {task['description']}"},
-            ],
-        )
-        prompts.append(response['choices'][0]['message']['content']) # type: ignore
+        ]
+        response = openai_chat_completion(model, messages)
+        prompts.append(response)
     return prompts
 
-def execute_prompts(prompts, model, taskRunCount):
+def execute_prompts(prompts, model, task_run_count):
     results = {}
     for i, prompt in enumerate(prompts):
         task_results = []
-        for _ in range(taskRunCount):  # Run each task  multiple times
-            print(f"execute_prompts: executing prompt {prompt}")
-            response = openai.ChatCompletion.create(
-                model=model,
-                messages=[
-                    {"role": "user", "content": prompt},
-                ],
-            )
-            task_results.append(response['choices'][0]['message']['content']) # type: ignore
+        for i in range(task_run_count):  # Run each task  multiple times
+            print(f"execute_prompts: executing prompt {prompt}. Attempt {i}/{task_run_count}")
+            messages=[
+                # {"role": "system", "content": "if the content contains a tag [CODE} then only return code."},
+                {"role": "user", "content": prompt},
+            ]
+            new_prompt = openai_chat_completion(model, messages)
+            task_results.append(new_prompt)
         results[i] = task_results
     return results
 
@@ -57,13 +78,11 @@ def score_task_result(task, result, tasks, model):
     # Usefulness: depends on context. For programming tasks this can be functional completeness. If the LLM's solution does the same thing as the optimal solution the score should be '1'
 
     # Use OpenAI function calling to generate a usefulness score
-    response = openai.ChatCompletion.create(
-        model=model,
-        messages=[
+    messages=[
             {"role": "system", "content": "You are an AI that analyses submitted solutions to tasks and rates them against their optimal solutions. You give scores based on how useful the submitted solutions are compared to the optimal solution"},
             {"role": "user", "content": f"A task was given to a language model and completed. Given the task, rate the usefulness of the solution compared to the optimal solution \n\nTask:\n{tasks[task]}\n\nSubmitted solution:\n{result}\n\nOptimal solution:\n{tasks[task]['optimal_solution']}\n\nRate on a scale of 0 to 1, where 0 means no usefulness and 1 means equally useful to the optimal solution."},
-        ],
-        functions={
+    ]
+    functions={
             "name": "rate",
             "description": "rates the submitted solution compared to the optimal solution",
             "parameters": {
@@ -82,20 +101,18 @@ def score_task_result(task, result, tasks, model):
                 "required": ["explanation", "score"]
             }
         }
-    )
-    score = float(response['choices'][0]['message']["function_call"]["arguments"]) # type: ignore
+    response = openai_chat_completion(model, messages, functions)
+    # extract score from response its one of the two fields
+    score = float(response) # type: ignore
     return score
 
 def analyze_prompt_quality(task, prompt, result, optimal_result, score, model):
     # Use OpenAI function calling to analyze the quality of the prompt
-    response = openai.ChatCompletion.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": "You are an AI that analyzes the quality of prompts used to generate solutions to tasks. You identify key instructions that made the prompt good."},
-            {"role": "user", "content": f"Given the task, the prompt used, the result from the prompt, the optimal result, and the score, analyze the quality of the prompt and identify what made it good. \n\nTask:\n{task}\n\nPrompt used:\n{prompt}\n\nResult from prompt:\n{result}\n\nOptimal result:\n{optimal_result}\n\nScore:\n{score}\n\nIdentify key instructions that made the prompt good."},
-        ],
-    )
-    analysis = response['choices'][0]['message']['content'] # type: ignore
+    messages=[
+        {"role": "system", "content": "You are an AI that analyzes the quality of prompts used to generate solutions to tasks. You identify key instructions that made the prompt good."},
+        {"role": "user", "content": f"Given the task, the prompt used, the result from the prompt, the optimal result, and the score, analyze the quality of the prompt and identify what made it good. \n\nTask:\n{task}\n\nPrompt used:\n{prompt}\n\nResult from prompt:\n{result}\n\nOptimal result:\n{optimal_result}\n\nScore:\n{score}\n\nIdentify key instructions that made the prompt good."},
+    ]
+    analysis = openai_chat_completion(model, messages)
     return analysis
 
 # TOOD (maybe):
@@ -107,12 +124,20 @@ def analyze_prompt_quality(task, prompt, result, optimal_result, score, model):
 def main():
     prompts = {}
     for task_key, task_value in tasks.items():
-        prompts[task_key] = generate_prompts_for_task(task_value, model, variationCount)
+        prompts[task_key] = generate_prompts_for_task(task_value, model, variation_count)
 
     results = {}
     for task_key, prompt in prompts.items():
-        results[task_key] = execute_prompts(prompts[task_key], model, taskRunCount)
-        print(f"Results for {task_key}:", results[task_key])
+        results[task_key] = execute_prompts(prompts[task_key], model, task_run_count)
+
+    # Print the results in a structured way
+    for task_key, task_results in results.items():
+        print(f"\nTask: {task_key}")
+        for prompt_index, prompt_results in task_results.items():
+            print(f"\tPrompt {prompt_index + 1}:")
+            for run_index, run_result in enumerate(prompt_results):
+                print(f"\t\tRun {run_index + 1}: {run_result}")
+
 
     return
     # Compare results to optimal and score them
