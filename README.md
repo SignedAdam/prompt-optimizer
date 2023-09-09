@@ -9,7 +9,7 @@ This project uses the OpenAI API to dynamically generate prompts for a set of ta
 ## Prerequisites
 
 - Python 3
-- OpenAI API key
+- OpenAI API key (`cp .envexample .env` then open .env and set your OpenAI key)
 
 You can install these packages using pip:
 
