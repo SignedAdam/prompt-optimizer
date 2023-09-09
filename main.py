@@ -30,13 +30,13 @@ def generate_prompts_for_task(task, model, variationCount):
                 {"role": "user", "content": f"Please provide a prompt for completing the following task: {task['description']}"},
             ],
         )
-        prompts.append(response['choices'][0]['message']) # type: ignore
+        prompts.append(response['choices'][0]['message']['content']) # type: ignore
     return prompts
 
 def execute_prompts(prompts, model, taskRunCount):
     results = {}
-    for task, prompt in prompts.items():
-        results[task] = []
+    for i, prompt in enumerate(prompts):
+        task_results = []
         for _ in range(taskRunCount):  # Run each task  multiple times
             print(f"execute_prompts: executing prompt {prompt}")
             response = openai.ChatCompletion.create(
@@ -45,15 +45,17 @@ def execute_prompts(prompts, model, taskRunCount):
                     {"role": "user", "content": prompt},
                 ],
             )
-            results[task].append(response['choices'][0]['message']) # type: ignore
+            task_results.append(response['choices'][0]['message']['content']) # type: ignore
+        results[i] = task_results
     return results
 
 def score_task_result(task, result, tasks, model):
     # The scoring logic is as follows:
     # - We will use OpenAI function calling to generate a usefulness score between the result and the optimal solution.
-    # - The score will be a value between 0 and 1, where 1 means the result and the optimal solution are identical in terms of content.
-    # This approach takes into account the content of the solutions, not just the text.
-    
+    # - The score will be a value between 0 and 1, where 1 means the result and the optimal solution are identical in terms of usefulness.
+    # This approach takes into account the USEFULNESS of the solutions, not the text similarity.
+    # Usefulness: depends on context. For programming tasks this can be functional completeness. If the LLM's solution does the same thing as the optimal solution the score should be '1'
+
     # Use OpenAI function calling to generate a usefulness score
     response = openai.ChatCompletion.create(
         model=model,
@@ -96,19 +98,31 @@ def analyze_prompt_quality(task, prompt, result, optimal_result, score, model):
     analysis = response['choices'][0]['message']['content'] # type: ignore
     return analysis
 
+# TOOD (maybe):
+# - parallel execute everything
+# - provide GPT with prompts that were already generated so it stays unique
+# - experiment with generating multiple prompts in one go VS one by one
+# - add some kind of tag on the tasks like [code] which should have the LLM generate only code
+
 def main():
     prompts = {}
     for task_key, task_value in tasks.items():
         prompts[task_key] = generate_prompts_for_task(task_value, model, variationCount)
 
-    results = execute_prompts(prompts, model, taskRunCount)
-    print("Results:", results)
+    results = {}
+    for task_key, prompt in prompts.items():
+        results[task_key] = execute_prompts(prompts[task_key], model, taskRunCount)
+        print(f"Results for {task_key}:", results[task_key])
 
+    return
     # Compare results to optimal and score them
     scored_results = {}
     for task in tasks:
+        scores = []
         for result in results[task]:
-            scored_results[task] = score_task_result(task, result, tasks, model)
+            scores.append(score_task_result(task, result, tasks, model))
+        # Take the average of all scores for a given prompt
+        scored_results[task] = sum(scores) / len(scores) if scores else 0
 
     # Print the results in a user-friendly way and write them to a file
     with open('results.txt', 'w') as f:

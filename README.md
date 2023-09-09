@@ -13,4 +13,4 @@ This project uses the OpenAI API to dynamically generate prompts for a set of ta
 
 You can install these packages using pip:
 
-pip install -r requirements.txt
+>pip install -r requirements.txt
