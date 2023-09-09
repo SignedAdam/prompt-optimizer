@@ -103,7 +103,7 @@ def main():
 
     results = execute_prompts(prompts, model, taskRunCount)
     print("Results:", results)
-    return
+
     # Compare results to optimal and score them
     scored_results = {}
     for task in tasks:
